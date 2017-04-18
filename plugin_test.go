@@ -1,209 +1,199 @@
 package main
 
 import (
-	"io/ioutil"
-	"os"
-	"strings"
+	"fmt"
 	"testing"
 )
 
-func TestInitialiseKubeconfig(t *testing.T) {
-
-	cmd := make([]string, 2)
-	cmd[0] = "install"
-	cmd[1] = "--debug"
-
-	plugin := Plugin{
-		Config: Config{
-			APIServer:     "http://myapiserver",
-			Token:         "secret-token",
-			HelmCommand:   cmd,
-			Namespace:     "default",
-			SkipTLSVerify: true,
-		},
-	}
-
-	configfile := "config3.test"
-	initialiseKubeconfig(&plugin.Config, "kubeconfig", configfile)
-	data, err := ioutil.ReadFile(configfile)
-	if err != nil {
-		t.Errorf("Error reading file %v", err)
-	}
-	kubeConfigStr := string(data)
-
-	if !strings.Contains(kubeConfigStr, "secret-token") {
-		t.Errorf("Kubeconfig doesn't render token")
-	}
-	if !strings.Contains(kubeConfigStr, "http://myapiserver") {
-		t.Errorf("Kubeconfig doesn't render APIServer")
-	}
-
-}
-
-func TestGetHelmCommand(t *testing.T) {
-	os.Setenv("DRONE_BUILD_EVENT", "push")
-	plugin := &Plugin{
-		Config: Config{
-			APIServer:     "http://myapiserver",
-			Token:         "secret-token",
-			HelmCommand:   nil,
-			Namespace:     "default",
-			SkipTLSVerify: true,
-			Debug:         true,
-			DryRun:        true,
-			Chart:         "./chart/test",
-			Release:       "test-release",
-			Values:        "image.tag=v.0.1.0,nameOverride=my-over-app",
-			Wait:          true,
-		},
-	}
-	setHelmCommand(plugin)
-	res := strings.Join(plugin.Config.HelmCommand[:], " ")
-	expected := "upgrade --install test-release ./chart/test --set image.tag=v.0.1.0,nameOverride=my-over-app --namespace default --dry-run --debug --wait"
-	if res != expected {
-		t.Errorf("Result is %s and we expected %s", res, expected)
+func testConfig() Config {
+	return Config{
+		KubeConfig: "kubeconfig",
+		Context:    "test-context",
+		Release:    "test-release",
+		Chart:      "test-chart",
+		Values:     "[\"test-values1\", \"test-values2\"]",
+		Set:        "test-key1=test-value1,test-key2=test-value2",
+		Namespace:  "test-namespace",
 	}
 }
 
-func TestResolveSecrets(t *testing.T) {
-	tag := "v0.1.1"
-	api := "http://apiserver"
-	os.Setenv("MY_TAG", tag)
-	os.Setenv("MY_API_SERVER", api)
-	os.Setenv("MY_TOKEN", "12345")
-
-	plugin := &Plugin{
-		Config: Config{
-			HelmCommand:   nil,
-			Namespace:     "default",
-			SkipTLSVerify: true,
-			Debug:         true,
-			DryRun:        true,
-			Chart:         "./chart/test",
-			Release:       "test-release",
-			Prefix:        "MY",
-			Values:        "image.tag=$TAG,api=${API_SERVER},nameOverride=my-over-app,second.tag=${TAG}",
-		},
+// {kubectl} config view --output jsonpath='{.contexts[?(@.name == "{context}")].context.namespace}'
+func TestKubectlNamespacePath(test *testing.T) {
+	if kubectlNamespaceCmd(testConfig()).Path != kubectl {
+		test.Fail()
 	}
-
-	resolveSecrets(plugin)
-	// test that the subsitution works
-	if !strings.Contains(plugin.Config.Values, tag) {
-		t.Errorf("env var ${TAG} not resolved %s", tag)
+}
+func TestKubectlNamespaceConfig(test *testing.T) {
+	if kubectlNamespaceCmd(testConfig()).Args[1] != "config" {
+		test.Fail()
 	}
-	if strings.Contains(plugin.Config.Values, "${TAG}") {
-		t.Errorf("env var ${TAG} not resolved %s", tag)
+}
+func TestKubectlNamespaceView(test *testing.T) {
+	if kubectlNamespaceCmd(testConfig()).Args[2] != "view" {
+		test.Fail()
 	}
-
-	if plugin.Config.APIServer != api {
-		t.Errorf("env var ${API_SERVER} not resolved %s", api)
+}
+func TestKubectlNamespaceOutput(test *testing.T) {
+	if kubectlNamespaceCmd(testConfig()).Args[3] != "--output" {
+		test.Fail()
+	}
+}
+func TestKubectlNamespaceJson(test *testing.T) {
+	if kubectlNamespaceCmd(testConfig()).Args[4] != "jsonpath={.contexts[?(@.name == \"test-context\")].context.namespace}" {
+		fmt.Println(kubectlNamespaceCmd(testConfig()).Args[4])
+		test.Fail()
 	}
 }
 
-func TestGetEnvVars(t *testing.T) {
-
-	testText := "this should be ${TAG} now"
-	result := getEnvVars(testText)
-	if len(result) == 0 {
-		t.Error("No envvar was found")
+// {helm} --kube-context {context} --tiller-namespace {namespace} init --skip-refresh --upgrade
+func TestHelmInitPath(test *testing.T) {
+	if helmInitCmd(testConfig()).Path != helm {
+		test.Fail()
 	}
-	envvar := result[0]
-	if !strings.Contains(envvar[2], "TAG") {
-		t.Errorf("envvar not found in %s", testText)
+}
+func TestHelmInitKubeContext(test *testing.T) {
+	if helmInitCmd(testConfig()).Args[1] != "--kube-context" {
+		test.Fail()
+	}
+}
+func TestHelmInitContext(test *testing.T) {
+	if helmInitCmd(testConfig()).Args[2] != "test-context" {
+		test.Fail()
+	}
+}
+func TestHelmInitKubeTillerNamespace(test *testing.T) {
+	if helmInitCmd(testConfig()).Args[3] != "--tiller-namespace" {
+		test.Fail()
+	}
+}
+func TestHelmInitKubeNamespace(test *testing.T) {
+	if helmInitCmd(testConfig()).Args[4] != "test-namespace" {
+		test.Fail()
+	}
+}
+func TestHelmInitInit(test *testing.T) {
+	if helmInitCmd(testConfig()).Args[5] != "init" {
+		test.Fail()
+	}
+}
+func TestHelmInitSkipRefresh(test *testing.T) {
+	if helmInitCmd(testConfig()).Args[6] != "--skip-refresh" {
+		test.Fail()
+	}
+}
+func TestHelmInitUpgrade(test *testing.T) {
+	if helmInitCmd(testConfig()).Args[7] != "--upgrade" {
+		test.Fail()
 	}
 }
 
-func TestReplaceEnvvars(t *testing.T) {
-	tag := "tagged"
-	os.Setenv("MY_TAG", tag)
-	prefix := "MY"
-	testText := "this should be ${TAG} now ${TAG}"
-	result := getEnvVars(testText)
-	resolved := replaceEnvvars(result, prefix, testText)
-	if !strings.Contains(resolved, tag) {
-		t.Errorf("EnvVar MY_TAG no replaced by %s  -- %s \n", tag, resolved)
+// {kubectl} --context {context} rollout status deployment/tiller-deploy
+func TestTillerRolloutPath(test *testing.T) {
+	if tillerRolloutCmd(testConfig()).Path != kubectl {
+		test.Fail()
+	}
+}
+func TestTillerRolloutContext(test *testing.T) {
+	if tillerRolloutCmd(testConfig()).Args[1] != "--context" {
+		test.Fail()
+	}
+}
+func TestTillerRolloutContextValue(test *testing.T) {
+	if tillerRolloutCmd(testConfig()).Args[2] != "test-context" {
+		test.Fail()
+	}
+}
+func TestTillerRolloutRollout(test *testing.T) {
+	if tillerRolloutCmd(testConfig()).Args[3] != "rollout" {
+		test.Fail()
+	}
+}
+func TestTillerRolloutStatus(test *testing.T) {
+	if tillerRolloutCmd(testConfig()).Args[4] != "status" {
+		test.Fail()
+	}
+}
+func TestTillerRolloutDeployment(test *testing.T) {
+	if tillerRolloutCmd(testConfig()).Args[5] != "deployment/tiller-deploy" {
+		test.Fail()
 	}
 }
 
-func TestSetHelmHelp(t *testing.T) {
-	plugin := &Plugin{
-		Config: Config{
-			HelmCommand:   nil,
-			Namespace:     "default",
-			SkipTLSVerify: true,
-			Debug:         true,
-			DryRun:        true,
-			Chart:         "./chart/test",
-			Release:       "test-release",
-			Prefix:        "MY",
-			Values:        "image.tag=$TAG,api=${API_SERVER},nameOverride=my-over-app,second.tag=${TAG}",
-		},
+// {helm} --kube-context {context} --tiller-namespace {namespace} upgrade --install {release} {chart} --values {values} --set {set} --wait
+func TestHelmUpgradePath(test *testing.T) {
+	if helmUpgradeCmd(testConfig()).Path != helm {
+		test.Fail()
 	}
-	setHelmHelp(plugin)
-	if plugin.Config.HelmCommand == nil {
-		t.Error("Helm help is not displayed")
+}
+func TestHelmUpgradeKubeContext(test *testing.T) {
+	if helmUpgradeCmd(testConfig()).Args[1] != "--kube-context" {
+		test.Fail()
+	}
+}
+func TestHelmUpgradeContext(test *testing.T) {
+	if helmUpgradeCmd(testConfig()).Args[2] != "test-context" {
+		test.Fail()
+	}
+}
+func TestHelmUpgradeKubeTillerNamespace(test *testing.T) {
+	if helmUpgradeCmd(testConfig()).Args[3] != "--tiller-namespace" {
+		test.Fail()
+	}
+}
+func TestHelmUpgradeKubeNamespace(test *testing.T) {
+	if helmUpgradeCmd(testConfig()).Args[4] != "test-namespace" {
+		test.Fail()
+	}
+}
+func TestHelmUpgradeUpgrade(test *testing.T) {
+	if helmUpgradeCmd(testConfig()).Args[5] != "upgrade" {
+		test.Fail()
+	}
+}
+func TestHelmUpgradeInstall(test *testing.T) {
+	if helmUpgradeCmd(testConfig()).Args[6] != "--install" {
+		test.Fail()
+	}
+}
+func TestHelmUpgradeRelease(test *testing.T) {
+	if helmUpgradeCmd(testConfig()).Args[7] != "test-release" {
+		test.Fail()
+	}
+}
+func TestHelmUpgradeChart(test *testing.T) {
+	if helmUpgradeCmd(testConfig()).Args[8] != "test-chart" {
+		test.Fail()
+	}
+}
+func TestHelmUpgradeValues(test *testing.T) {
+	if helmUpgradeCmd(testConfig()).Args[9] != "--values" {
+		test.Fail()
+	}
+}
+func TestHelmUpgradeValuesValue(test *testing.T) {
+	if helmUpgradeCmd(testConfig()).Args[10] != "[\"test-values1\", \"test-values2\"]" {
+		test.Fail()
+	}
+}
+func TestHelmUpgradeSet(test *testing.T) {
+	if helmUpgradeCmd(testConfig()).Args[11] != "--set" {
+		test.Fail()
+	}
+}
+func TestHelmUpgradeSetValues(test *testing.T) {
+	if helmUpgradeCmd(testConfig()).Args[12] != "test-key1=test-value1,test-key2=test-value2" {
+		test.Fail()
+	}
+}
+func TestHelmUpgradeWait(test *testing.T) {
+	if helmUpgradeCmd(testConfig()).Args[13] != "--wait" {
+		test.Fail()
 	}
 }
 
-func TestDetHelmInit(t *testing.T) {
-	plugin := &Plugin{
-		Config: Config{
-			HelmCommand:   nil,
-			Namespace:     "default",
-			SkipTLSVerify: true,
-			Debug:         true,
-			DryRun:        true,
-			Chart:         "./chart/test",
-			Release:       "test-release",
-			Prefix:        "MY",
-			Values:        "image.tag=$TAG,api=${API_SERVER},nameOverride=my-over-app,second.tag=${TAG}",
-			TillerNs:      "system-test",
-		},
-	}
-	init := doHelmInit(plugin)
-	result := strings.Join(init, " ")
-	expected := "init --tiller-namespace " + plugin.Config.TillerNs
-
-	if expected != result {
-		t.Error("Tiller not installed in proper namespace")
-	}
-}
-
-func TestResolveSecretsFallback(t *testing.T) {
-	tag := "v0.1.1"
-	api := "http://apiserver"
-	os.Setenv("MY_TAG", tag)
-	os.Setenv("MY_API_SERVER", api)
-	os.Setenv("MY_TOKEN", "12345")
-	os.Setenv("NOTTOKEN", "99999")
-
-	plugin := &Plugin{
-		Config: Config{
-			HelmCommand:   nil,
-			Namespace:     "default",
-			SkipTLSVerify: true,
-			Debug:         true,
-			DryRun:        true,
-			Chart:         "./chart/test",
-			Release:       "test-release",
-			Prefix:        "MY",
-			Values:        "image.tag=$TAG,api=${API_SERVER},nottoken=${NOTTOKEN},nameOverride=my-over-app,second.tag=${TAG}",
-		},
-	}
-
-	resolveSecrets(plugin)
-	// test that the subsitution works
-	if !strings.Contains(plugin.Config.Values, tag) {
-		t.Errorf("env var ${TAG} not resolved %s", tag)
-	}
-	if strings.Contains(plugin.Config.Values, "${TAG}") {
-		t.Errorf("env var ${TAG} not resolved %s", tag)
-	}
-
-	if plugin.Config.APIServer != api {
-		t.Errorf("env var ${API_SERVER} not resolved %s", api)
-	}
-	if !strings.Contains(plugin.Config.Values, "99999") {
-		t.Errorf("envar ${NOTTOKEN} has not been resolved to 99999, not using prefix")
-	}
-}
+// context
+// namespace
+// release
+// chart
+// values (files)
+// set (specific values)

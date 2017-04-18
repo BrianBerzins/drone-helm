@@ -1,30 +1,16 @@
 FROM alpine:latest
-MAINTAINER Ivan Pedrazas <ipedrazas@gmail.com>
 
+RUN mkdir /root/.kube
 
-RUN apk -Uuv add curl bash && rm /var/cache/apk/*
+ADD https://storage.googleapis.com/kubernetes-release/release/v1.6.0/bin/linux/amd64/kubectl /usr/local/bin/kubectl
+ADD https://storage.googleapis.com/kubernetes-helm/helm-v2.3.0-linux-amd64.tar.gz /tmp
 
-ENV VERSION v2.2.2
-ENV FILENAME helm-${VERSION}-linux-amd64.tar.gz
-ENV KUBECTL v1.5.3
+RUN tar -zxvf tmp/helm-v2.3.0-linux-amd64.tar.gz -C /tmp \
+    && mv /tmp/linux-amd64/helm /usr/local/bin/helm \
+    && rm -rf /tmp \
+    && chmod a+x /usr/local/bin/kubectl \
+    && chmod a+x /usr/local/bin/helm
 
-ADD http://storage.googleapis.com/kubernetes-helm/${FILENAME} /tmp
+ADD drone-helm /bin/
+ENTRYPOINT ["/bin/drone-helm"]
 
-ADD https://storage.googleapis.com/kubernetes-release/release/${KUBECTL}/bin/linux/amd64/kubectl /tmp
-
-
-RUN tar -zxvf /tmp/${FILENAME} -C /tmp \
-  && mv /tmp/linux-amd64/helm /bin/helm \
-  && chmod +x /tmp/kubectl \
-  && mv /tmp/kubectl /bin/kubectl \
-  && rm -rf /tmp
-
-LABEL description="Kubeclt and Helm."
-LABEL base="alpine"
-LABEL language="python"
-
-
-COPY drone-helm /bin/drone-helm
-COPY kubeconfig /root/.kube/kubeconfig
-
-ENTRYPOINT [ "/bin/drone-helm" ]

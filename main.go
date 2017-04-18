@@ -18,15 +18,15 @@ func main() {
 	app.Action = run
 	app.Version = fmt.Sprintf("1.0.%s", build)
 	app.Flags = []cli.Flag{
-		cli.StringSliceFlag{
-			Name:   "helm_command",
-			Usage:  "add the command Helm has to execute",
-			EnvVar: "PLUGIN_HELM_COMMAND,HELM_COMMAND",
+		cli.StringFlag{
+			Name:   "kube-config",
+			Usage:  "kubernetes config",
+			EnvVar: "PLUGIN_KUBE_CONFIG,KUBE_CONFIG",
 		},
 		cli.StringFlag{
-			Name:   "namespace",
-			Usage:  "Kubernetes namespace",
-			EnvVar: "PLUGIN_NAMESPACE,NAMESPACE",
+			Name:   "context",
+			Usage:  "context (from kube/config to use for this command)",
+			EnvVar: "PLUGIN_CONTEXT,CONTEXT",
 		},
 		cli.StringFlag{
 			Name:   "release",
@@ -35,48 +35,18 @@ func main() {
 		},
 		cli.StringFlag{
 			Name:   "chart",
-			Usage:  "Kubernetes helm release",
+			Usage:  "Kubernetes helm chart",
 			EnvVar: "PLUGIN_CHART,CHART",
 		},
 		cli.StringFlag{
 			Name:   "values",
-			Usage:  "Kubernetes helm release",
+			Usage:  "files with chart values (e.g. [\"file1.yml\",\"file2.yml\"])",
 			EnvVar: "PLUGIN_VALUES,VALUES",
 		},
 		cli.StringFlag{
-			Name:   "values_files",
-			Usage:  "Helm values override files",
+			Name:   "set",
+			Usage:  "key value pairs that override values (e.g. test-key1=test-value1,test-key2=test-value2)",
 			EnvVar: "PLUGIN_VALUES_FILES,VALUES_FILES",
-		},
-		cli.BoolFlag{
-			Name:   "skip_tls_verify",
-			Usage:  "Skip TLS verification",
-			EnvVar: "PLUGIN_SKIP_TLS_VERIFY,SKIP_TLS_VERIFY",
-		},
-		cli.BoolFlag{
-			Name:   "debug",
-			Usage:  "Debug",
-			EnvVar: "PLUGIN_DEBUG,DEBUG",
-		},
-		cli.BoolFlag{
-			Name:   "dry-run",
-			Usage:  "Helm dry-run",
-			EnvVar: "PLUGIN_DRY_RUN,DRY_RUN",
-		},
-		cli.StringFlag{
-			Name:   "prefix",
-			Usage:  "Prefix for all the secrets",
-			EnvVar: "PLUGIN_PREFIX,PREFIX",
-		},
-		cli.StringFlag{
-			Name:   "tiller-ns",
-			Usage:  "Namespace to install Tiller",
-			EnvVar: "PLUGIN_TILLER_NS,TILLER_NS",
-		},
-		cli.BoolFlag{
-			Name:   "wait",
-			Usage:  "if set, will wait until all Pods, PVCs, and Services are in a ready state before marking the release as successful.",
-			EnvVar: "PLUGIN_WAIT,WAIT",
 		},
 	}
 	if err := app.Run(os.Args); err != nil {
@@ -84,32 +54,19 @@ func main() {
 	}
 }
 
-func run(c *cli.Context) error {
-	if c.String("env-file") != "" {
-		_ = godotenv.Load(c.String("env-file"))
+func run(context *cli.Context) error {
+	if context.String("env-file") != "" {
+		_ = godotenv.Load(context.String("env-file"))
 	}
 	plugin := Plugin{
 		Config: Config{
-			APIServer:     c.String("api_server"),
-			Token:         c.String("token"),
-			HelmCommand:   c.StringSlice("helm_command"),
-			Namespace:     c.String("namespace"),
-			SkipTLSVerify: c.Bool("skip_tls_verify"),
-			Values:        c.String("values"),
-			ValuesFiles:   c.String("values_files"),
-			Release:       c.String("release"),
-			Chart:         c.String("chart"),
-			Debug:         c.Bool("debug"),
-			DryRun:        c.Bool("dry-run"),
-			Secrets:       c.StringSlice("secrets"),
-			Prefix:        c.String("prefix"),
-			TillerNs:      c.String("tiller-ns"),
-			Wait:          c.Bool("wait"),
+			KubeConfig: context.String("kube-config"),
+			Context:    context.String("context"),
+			Release:    context.String("release"),
+			Chart:      context.String("chart"),
+			Values:     context.String("values"),
+			Set:        context.String("set"),
 		},
-	}
-	resolveSecrets(&plugin)
-	if plugin.Config.Debug {
-		plugin.debug()
 	}
 	return plugin.Exec()
 }

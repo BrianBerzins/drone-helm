@@ -1,219 +1,159 @@
 package main
 
 import (
+	"errors"
 	"fmt"
-	"github.com/alecthomas/template"
 	"io/ioutil"
-	"log"
 	"os"
 	"os/exec"
-	"regexp"
 	"strings"
 )
 
-var HELM_BIN = "/bin/helm"
-var KUBECONFIG = "/root/.kube/kubeconfig"
-var CONFIG = "/root/.kube/config"
+const kubectl = "/usr/local/bin/kubectl"
+const kubeConfig = "/root/.kube/config"
+const helm = "/usr/local/bin/helm"
 
 type (
-	// Config maps the params we need to run Helm
+	// configuration for the plugin
 	Config struct {
-		APIServer     string   `json:"api_server"`
-		Token         string   `json:"token"`
-		HelmCommand   []string `json:"helm_command"`
-		SkipTLSVerify bool     `json:"tls_skip_verify"`
-		Namespace     string   `json:"namespace"`
-		Release       string   `json:"release"`
-		Chart         string   `json:"chart"`
-		Values        string   `json:"values"`
-		ValuesFiles   string   `json:"values_files"`
-		Debug         bool     `json:"debug"`
-		DryRun        bool     `json:"dry_run"`
-		Secrets       []string `json:"secrets"`
-		Prefix        string   `json:"prefix"`
-		TillerNs      string   `json:"tiller_ns"`
-		Wait          bool     `json:"wait"`
+		KubeConfig string
+		Context    string
+		Release    string
+		Chart      string
+		Values     string
+		Set        string
+		Namespace  string
 	}
-	// Plugin default
+	// plugin default
 	Plugin struct {
 		Config Config
 	}
 )
 
-func setHelmHelp(p *Plugin) {
-	p.Config.HelmCommand = []string{""}
-}
-func setDeleteEventCommand(p *Plugin) {
-	upgrade := make([]string, 2)
-	upgrade[0] = "delete"
-	upgrade[1] = p.Config.Release
-
-	p.Config.HelmCommand = upgrade
-}
-
-func setPushEventCommand(p *Plugin) {
-	upgrade := make([]string, 2)
-	upgrade[0] = "upgrade"
-	upgrade[1] = "--install"
-
-	if p.Config.Release != "" {
-		upgrade = append(upgrade, p.Config.Release)
-	}
-	upgrade = append(upgrade, p.Config.Chart)
-	if p.Config.Values != "" {
-		upgrade = append(upgrade, "--set")
-		upgrade = append(upgrade, p.Config.Values)
-	}
-	if p.Config.ValuesFiles != "" {
-		for _, valuesFile := range strings.Split(p.Config.ValuesFiles, ",") {
-			upgrade = append(upgrade, "--values")
-			upgrade = append(upgrade, valuesFile)
-		}
-	}
-	if p.Config.Namespace != "" {
-		upgrade = append(upgrade, "--namespace")
-		upgrade = append(upgrade, p.Config.Namespace)
-	}
-	if p.Config.DryRun {
-		upgrade = append(upgrade, "--dry-run")
-	}
-	if p.Config.Debug {
-		upgrade = append(upgrade, "--debug")
-	}
-	if p.Config.Wait {
-		upgrade = append(upgrade, "--wait")
-	}
-	p.Config.HelmCommand = upgrade
-
-}
-
-func setHelmCommand(p *Plugin) {
-	buildEvent := os.Getenv("DRONE_BUILD_EVENT")
-	switch buildEvent {
-	case "push":
-		setPushEventCommand(p)
-	case "delete":
-		setDeleteEventCommand(p)
-	default:
-		setHelmHelp(p)
-	}
-
-}
-
-func doHelmInit(p *Plugin) []string {
-	init := make([]string, 1)
-	init[0] = "init"
-	if p.Config.TillerNs != "" {
-		init = append(init, "--tiller-namespace")
-		init = append(init, p.Config.TillerNs)
-	}
-	return init
-
-}
-
 // Exec default method
-func (p *Plugin) Exec() error {
-	resolveSecrets(p)
-	if p.Config.APIServer == "" {
-		return fmt.Errorf("Error: API Server is needed to deploy.")
-	}
-	if p.Config.Token == "" {
-		return fmt.Errorf("Error: Token is needed to deploy.")
-	}
-	initialiseKubeconfig(&p.Config, KUBECONFIG, CONFIG)
+func (plugin *Plugin) Exec() error {
+	config := plugin.Config
 
-	if p.Config.Debug {
-		p.debug()
+	// check required fields
+	if config.KubeConfig == "" {
+		return errors.New("KUBE_CONFIG not provided")
+	}
+	if config.Chart == "" {
+		return errors.New("chart not provided")
+	}
+	if config.Release == "" {
+		return errors.New("release not provided")
 	}
 
-	init := doHelmInit(p)
-	err := runCommand(init)
-	if err != nil {
-		return fmt.Errorf("Error running helm command: " + strings.Join(init[:], " "))
+	// write the kube config file
+	writeError := writeKubeConfig(config)
+	if writeError != nil {
+		return writeError
 	}
-	setHelmCommand(p)
 
-	if p.Config.Debug {
-		log.Println("helm command: " + strings.Join(p.Config.HelmCommand[:], " "))
+	// get namespace from kube config file
+	namespace, namespaceError := outputFromCmd(kubectlNamespaceCmd(config))
+	if namespaceError != nil {
+		return namespaceError
 	}
-	err = runCommand(p.Config.HelmCommand)
-	if err != nil {
-		return fmt.Errorf("Error running helm command: " + strings.Join(p.Config.HelmCommand[:], " "))
+	config.Namespace = namespace
+
+	// helm initialize
+	initError := executeCmd(helmInitCmd(config))
+	if initError != nil {
+		return initError
 	}
+
+	// wait for helm deployment to complete
+	rolloutError := executeCmd(tillerRolloutCmd(config))
+	if rolloutError != nil {
+		return rolloutError
+	}
+
+	// helm upgrade
+	upgradeError := executeCmd(helmUpgradeCmd(config))
+	if upgradeError != nil {
+		return upgradeError
+	}
+
 	return nil
 }
 
-func initialiseKubeconfig(params *Config, source string, target string) error {
-	t, _ := template.ParseFiles(source)
-	f, err := os.Create(target)
-	err = t.Execute(f, params)
-	f.Close()
-	return err
+// write the kube config file from environment variable the default location
+func writeKubeConfig(config Config) error {
+	fmt.Fprintf(os.Stdout, "writing kube config to %s\n", kubeConfig)
+	return ioutil.WriteFile(kubeConfig, []byte(config.KubeConfig), 0644)
 }
 
-func runCommand(params []string) error {
-	cmd := new(exec.Cmd)
-	cmd = exec.Command(HELM_BIN, params...)
+// get the namespace for tiller from the kube config (using the context to figure out which one)
+// {kubectl} config view --output jsonpath='{.contexts[?(@.name == "{context}")].context.namespace}'
+func kubectlNamespaceCmd(config Config) *exec.Cmd {
+	return exec.Command(kubectl,
+		"config",
+		"view",
+		"--output",
+		fmt.Sprintf("jsonpath={.contexts[?(@.name == \"%s\")].context.namespace}", config.Context))
+}
 
-	cmd.Stdout = os.Stdout
+// do the helm init in case it is not already there
+// {helm} --kube-context {context} --tiller-namespace {namespace} init --skip-refresh --upgrade
+func helmInitCmd(config Config) *exec.Cmd {
+	return exec.Command(helm,
+		"--kube-context",
+		config.Context,
+		"--tiller-namespace",
+		config.Namespace,
+		"init",
+		"--skip-refresh",
+		"--upgrade")
+}
+
+// wait for the tiller deployment to be fully rolled out
+// {kubectl} --context {context} rollout status deployment/tiller-deploy
+func tillerRolloutCmd(config Config) *exec.Cmd {
+	return exec.Command(kubectl,
+		"--context",
+		config.Context,
+		"rollout",
+		"status",
+		"deployment/tiller-deploy")
+}
+
+// upgrade our release based on the configuration parameters
+// {helm} --kube-context {context} --tiller-namespace {namespace} upgrade --install {release} {chart} --values {values} --set {set} --wait
+func helmUpgradeCmd(config Config) *exec.Cmd {
+	return exec.Command(helm,
+		"--kube-context",
+		config.Context,
+		"--tiller-namespace",
+		config.Namespace,
+		"upgrade",
+		"--install",
+		config.Release,
+		config.Chart,
+		"--values",
+		config.Values,
+		"--set",
+		config.Set,
+		"--wait")
+}
+
+func outputFromCmd(cmd *exec.Cmd) (string, error) {
+	logCommand(cmd) // log the command to be run
 	cmd.Stderr = os.Stderr
-
-	err := cmd.Run()
-	return err
+	bytes, err := cmd.Output()
+	output := string(bytes)
+	fmt.Fprintf(os.Stdout, "%s\n", output)
+	return output, err
 }
 
-func resolveSecrets(p *Plugin) {
-	p.Config.Values = resolveEnvVar(p.Config.Values, p.Config.Prefix)
-	p.Config.APIServer = resolveEnvVar("${API_SERVER}", p.Config.Prefix)
-	p.Config.Token = resolveEnvVar("${KUBERNETES_TOKEN}", p.Config.Prefix)
+func executeCmd(cmd *exec.Cmd) error {
+	cmd.Stdout = os.Stdout // log standard out
+	cmd.Stderr = os.Stderr // log standard err
+	logCommand(cmd)        // log the command to be run
+	return cmd.Run()
 }
 
-// getEnvVars will return [${TAG} {TAG} TAG]
-func getEnvVars(envvars string) [][]string {
-	re := regexp.MustCompile(`\$(\{?(\w+)\}?)\.?`)
-	extracted := re.FindAllStringSubmatch(envvars, -1)
-	return extracted
-}
-
-func resolveEnvVar(key string, prefix string) string {
-	envvars := getEnvVars(key)
-	return replaceEnvvars(envvars, prefix, key)
-}
-
-func replaceEnvvars(envvars [][]string, prefix string, s string) string {
-	for _, envvar := range envvars {
-		envvarName := envvar[0]
-		envvarKey := envvar[2]
-		envval := os.Getenv(prefix + "_" + envvarKey)
-		if envval == "" {
-			envval = os.Getenv(envvarKey)
-		}
-		if strings.Contains(s, envvarName) {
-			s = strings.Replace(s, envvarName, envval, -1)
-		}
-	}
-	return s
-}
-
-func (p *Plugin) debug() {
-	fmt.Println(p)
-	// debug env vars
-	for _, e := range os.Environ() {
-		fmt.Println("-Var:--", e)
-	}
-	// debug plugin obj
-	fmt.Printf("Api server: %s \n", p.Config.APIServer)
-	fmt.Printf("Values: %s \n", p.Config.Values)
-	fmt.Printf("Secrets: %s \n", p.Config.Secrets)
-	fmt.Printf("ValuesFiles: %s \n", p.Config.ValuesFiles)
-
-	kubeconfig, err := ioutil.ReadFile(KUBECONFIG)
-	if err == nil {
-		fmt.Println(string(kubeconfig))
-	}
-	config, err := ioutil.ReadFile(CONFIG)
-	if err == nil {
-		fmt.Println(string(config))
-	}
-
+func logCommand(cmd *exec.Cmd) {
+	fmt.Fprintf(os.Stdout, "+ %s\n", strings.Join(cmd.Args, " "))
 }
