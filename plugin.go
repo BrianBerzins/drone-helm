@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"time"
 )
 
 const kubectl = "/usr/local/bin/kubectl"
@@ -16,13 +17,15 @@ const helm = "/usr/local/bin/helm"
 type (
 	// configuration for the plugin
 	Config struct {
-		KubeConfig string
-		Context    string
-		Release    string
-		Chart      string
-		Values     string
-		Set        string
-		Namespace  string
+		KubeConfig      string
+		TillerNamespace string
+		Context         string
+		Namespace       string
+		Release         string
+		Chart           string
+		Values          string
+		Set             string
+		RolloutStatus   string
 	}
 	// plugin default
 	Plugin struct {
@@ -51,23 +54,23 @@ func (plugin *Plugin) Exec() error {
 		return writeError
 	}
 
-	// get namespace from kube config file
-	namespace, namespaceError := outputFromCmd(kubectlNamespaceCmd(config))
-	if namespaceError != nil {
-		return namespaceError
+	// get namespace to deploy into
+	namespace, namespaceErr := outputFromCmd(kubectlNamespaceCmd(config))
+	if namespaceErr != nil {
+		return namespaceErr
 	}
 	config.Namespace = namespace
+
+	// if the tiller-namespace was not specified, use the namespace obtained from the kube config
+	if config.TillerNamespace == "" {
+		fmt.Fprintf(os.Stdout, "tiller namespace was not specified, using namespace %s", config.Namespace)
+		config.TillerNamespace = config.Namespace
+	}
 
 	// helm initialize
 	initError := executeCmd(helmInitCmd(config))
 	if initError != nil {
 		return initError
-	}
-
-	// wait for helm deployment to complete
-	rolloutError := executeCmd(tillerRolloutCmd(config))
-	if rolloutError != nil {
-		return rolloutError
 	}
 
 	// helm upgrade
@@ -76,6 +79,29 @@ func (plugin *Plugin) Exec() error {
 		return upgradeError
 	}
 
+	// wait for any deployments
+	if config.RolloutStatus != "" {
+		lastOutput := ""
+		for {
+			output, err := outputFromCmd(kubectlRolloutStatus(config))
+			if err != nil {
+				return err
+			}
+			currentOutput := string(output)
+			// only log output if it has changed
+			if currentOutput != lastOutput {
+				lastOutput = currentOutput
+				fmt.Fprint(os.Stdout, lastOutput)
+				if strings.Contains(lastOutput, "successfully rolled out") {
+					return nil // successful
+				}
+			} else {
+				time.Sleep(time.Second) // don't spam it too hard
+			}
+		}
+	}
+
+	// success
 	return nil
 }
 
@@ -96,46 +122,49 @@ func kubectlNamespaceCmd(config Config) *exec.Cmd {
 }
 
 // do the helm init in case it is not already there
-// {helm} --kube-context {context} --tiller-namespace {namespace} init --skip-refresh --upgrade
+// {helm} --kube-context {context} --tiller-namespace {namespace} init --client --skip-refresh --upgrade
 func helmInitCmd(config Config) *exec.Cmd {
 	return exec.Command(helm,
 		"--kube-context",
 		config.Context,
 		"--tiller-namespace",
-		config.Namespace,
+		config.TillerNamespace,
 		"init",
+		"--client-only",
 		"--skip-refresh",
 		"--upgrade")
 }
 
-// wait for the tiller deployment to be fully rolled out
-// {kubectl} --context {context} rollout status deployment/tiller-deploy
-func tillerRolloutCmd(config Config) *exec.Cmd {
+// wait for a rollout to fully complete
+// {kubectl} --context {context} rollout status --watch=false {rollout-status}
+func kubectlRolloutStatus(config Config) *exec.Cmd {
 	return exec.Command(kubectl,
 		"--context",
 		config.Context,
 		"rollout",
 		"status",
-		"deployment/tiller-deploy")
+		"--watch=false",
+		config.RolloutStatus)
 }
 
 // upgrade our release based on the configuration parameters
-// {helm} --kube-context {context} --tiller-namespace {namespace} upgrade --install {release} {chart} --values {values} --set {set} --wait
+// {helm} --kube-context {context} --tiller-namespace {namespace} upgrade {release} {chart} --namespace {namespace} --install --values {values} --set {set}
 func helmUpgradeCmd(config Config) *exec.Cmd {
 	return exec.Command(helm,
 		"--kube-context",
 		config.Context,
 		"--tiller-namespace",
-		config.Namespace,
+		config.TillerNamespace,
 		"upgrade",
-		"--install",
 		config.Release,
 		config.Chart,
+		"--install",
+		"--namespace",
+		config.Namespace,
 		"--values",
 		config.Values,
 		"--set",
-		config.Set,
-		"--wait")
+		config.Set)
 }
 
 func outputFromCmd(cmd *exec.Cmd) (string, error) {

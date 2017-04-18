@@ -7,13 +7,15 @@ import (
 
 func testConfig() Config {
 	return Config{
-		KubeConfig: "kubeconfig",
-		Context:    "test-context",
-		Release:    "test-release",
-		Chart:      "test-chart",
-		Values:     "[\"test-values1\", \"test-values2\"]",
-		Set:        "test-key1=test-value1,test-key2=test-value2",
-		Namespace:  "test-namespace",
+		KubeConfig:      "kubeconfig",
+		TillerNamespace: "test-tiller-namespace",
+		Namespace:       "test-namespace",
+		Context:         "test-context",
+		Release:         "test-release",
+		Chart:           "test-chart",
+		Values:          "test-value",
+		Set:             "test-key1=test-value1,test-key2=test-value2",
+		RolloutStatus:   "test-rollout-status",
 	}
 }
 
@@ -67,7 +69,7 @@ func TestHelmInitKubeTillerNamespace(test *testing.T) {
 	}
 }
 func TestHelmInitKubeNamespace(test *testing.T) {
-	if helmInitCmd(testConfig()).Args[4] != "test-namespace" {
+	if helmInitCmd(testConfig()).Args[4] != "test-tiller-namespace" {
 		test.Fail()
 	}
 }
@@ -76,50 +78,60 @@ func TestHelmInitInit(test *testing.T) {
 		test.Fail()
 	}
 }
+func TestHelmInitClient(test *testing.T) {
+	if helmInitCmd(testConfig()).Args[6] != "--client-only" {
+		test.Fail()
+	}
+}
 func TestHelmInitSkipRefresh(test *testing.T) {
-	if helmInitCmd(testConfig()).Args[6] != "--skip-refresh" {
+	if helmInitCmd(testConfig()).Args[7] != "--skip-refresh" {
 		test.Fail()
 	}
 }
 func TestHelmInitUpgrade(test *testing.T) {
-	if helmInitCmd(testConfig()).Args[7] != "--upgrade" {
+	if helmInitCmd(testConfig()).Args[8] != "--upgrade" {
 		test.Fail()
 	}
 }
 
-// {kubectl} --context {context} rollout status deployment/tiller-deploy
-func TestTillerRolloutPath(test *testing.T) {
-	if tillerRolloutCmd(testConfig()).Path != kubectl {
+// {kubectl} --context {context} rollout status --watch=false {status}
+func TestRolloutStatusPath(test *testing.T) {
+	if kubectlRolloutStatus(testConfig()).Path != kubectl {
 		test.Fail()
 	}
 }
-func TestTillerRolloutContext(test *testing.T) {
-	if tillerRolloutCmd(testConfig()).Args[1] != "--context" {
+func TestRolloutStatusContext(test *testing.T) {
+	if kubectlRolloutStatus(testConfig()).Args[1] != "--context" {
 		test.Fail()
 	}
 }
-func TestTillerRolloutContextValue(test *testing.T) {
-	if tillerRolloutCmd(testConfig()).Args[2] != "test-context" {
+func TestRolloutStatusContextValue(test *testing.T) {
+	if kubectlRolloutStatus(testConfig()).Args[2] != "test-context" {
 		test.Fail()
 	}
 }
-func TestTillerRolloutRollout(test *testing.T) {
-	if tillerRolloutCmd(testConfig()).Args[3] != "rollout" {
+func TestRolloutStatusRollout(test *testing.T) {
+	if kubectlRolloutStatus(testConfig()).Args[3] != "rollout" {
 		test.Fail()
 	}
 }
-func TestTillerRolloutStatus(test *testing.T) {
-	if tillerRolloutCmd(testConfig()).Args[4] != "status" {
+func TestRolloutStatusStatus(test *testing.T) {
+	if kubectlRolloutStatus(testConfig()).Args[4] != "status" {
 		test.Fail()
 	}
 }
-func TestTillerRolloutDeployment(test *testing.T) {
-	if tillerRolloutCmd(testConfig()).Args[5] != "deployment/tiller-deploy" {
+func TestRolloutStatusWait(test *testing.T) {
+	if kubectlRolloutStatus(testConfig()).Args[5] != "--watch=false" {
+		test.Fail()
+	}
+}
+func TestRolloutStatusValue(test *testing.T) {
+	if kubectlRolloutStatus(testConfig()).Args[6] != "test-rollout-status" {
 		test.Fail()
 	}
 }
 
-// {helm} --kube-context {context} --tiller-namespace {namespace} upgrade --install {release} {chart} --values {values} --set {set} --wait
+// {helm} --kube-context {context} --tiller-namespace {namespace} upgrade {release} {chart} --install --namespace {namespace} --values {values} --set {set} --wait
 func TestHelmUpgradePath(test *testing.T) {
 	if helmUpgradeCmd(testConfig()).Path != helm {
 		test.Fail()
@@ -141,7 +153,7 @@ func TestHelmUpgradeKubeTillerNamespace(test *testing.T) {
 	}
 }
 func TestHelmUpgradeKubeNamespace(test *testing.T) {
-	if helmUpgradeCmd(testConfig()).Args[4] != "test-namespace" {
+	if helmUpgradeCmd(testConfig()).Args[4] != "test-tiller-namespace" {
 		test.Fail()
 	}
 }
@@ -150,50 +162,48 @@ func TestHelmUpgradeUpgrade(test *testing.T) {
 		test.Fail()
 	}
 }
-func TestHelmUpgradeInstall(test *testing.T) {
-	if helmUpgradeCmd(testConfig()).Args[6] != "--install" {
-		test.Fail()
-	}
-}
 func TestHelmUpgradeRelease(test *testing.T) {
-	if helmUpgradeCmd(testConfig()).Args[7] != "test-release" {
+	if helmUpgradeCmd(testConfig()).Args[6] != "test-release" {
 		test.Fail()
 	}
 }
 func TestHelmUpgradeChart(test *testing.T) {
-	if helmUpgradeCmd(testConfig()).Args[8] != "test-chart" {
+	if helmUpgradeCmd(testConfig()).Args[7] != "test-chart" {
+		test.Fail()
+	}
+}
+func TestHelmUpgradeInstall(test *testing.T) {
+	if helmUpgradeCmd(testConfig()).Args[8] != "--install" {
+		test.Fail()
+	}
+}
+func TestHelmUpgradeNamespace(test *testing.T) {
+	if helmUpgradeCmd(testConfig()).Args[9] != "--namespace" {
+		test.Fail()
+	}
+}
+func TestHelmUpgradeNamespaceValue(test *testing.T) {
+	if helmUpgradeCmd(testConfig()).Args[10] != "test-namespace" {
 		test.Fail()
 	}
 }
 func TestHelmUpgradeValues(test *testing.T) {
-	if helmUpgradeCmd(testConfig()).Args[9] != "--values" {
+	if helmUpgradeCmd(testConfig()).Args[11] != "--values" {
 		test.Fail()
 	}
 }
 func TestHelmUpgradeValuesValue(test *testing.T) {
-	if helmUpgradeCmd(testConfig()).Args[10] != "[\"test-values1\", \"test-values2\"]" {
+	if helmUpgradeCmd(testConfig()).Args[12] != "test-value" {
 		test.Fail()
 	}
 }
 func TestHelmUpgradeSet(test *testing.T) {
-	if helmUpgradeCmd(testConfig()).Args[11] != "--set" {
+	if helmUpgradeCmd(testConfig()).Args[13] != "--set" {
 		test.Fail()
 	}
 }
 func TestHelmUpgradeSetValues(test *testing.T) {
-	if helmUpgradeCmd(testConfig()).Args[12] != "test-key1=test-value1,test-key2=test-value2" {
+	if helmUpgradeCmd(testConfig()).Args[14] != "test-key1=test-value1,test-key2=test-value2" {
 		test.Fail()
 	}
 }
-func TestHelmUpgradeWait(test *testing.T) {
-	if helmUpgradeCmd(testConfig()).Args[13] != "--wait" {
-		test.Fail()
-	}
-}
-
-// context
-// namespace
-// release
-// chart
-// values (files)
-// set (specific values)

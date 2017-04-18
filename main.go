@@ -24,6 +24,11 @@ func main() {
 			EnvVar: "PLUGIN_KUBE_CONFIG,KUBE_CONFIG",
 		},
 		cli.StringFlag{
+			Name:   "tiller-namespace",
+			Usage:  "namespace where tiller resides",
+			EnvVar: "PLUGIN_TILLER_NAMESPACE,TILLER_NAMESPACE",
+		},
+		cli.StringFlag{
 			Name:   "context",
 			Usage:  "context (from kube/config to use for this command)",
 			EnvVar: "PLUGIN_CONTEXT,CONTEXT",
@@ -46,7 +51,12 @@ func main() {
 		cli.StringFlag{
 			Name:   "set",
 			Usage:  "key value pairs that override values (e.g. test-key1=test-value1,test-key2=test-value2)",
-			EnvVar: "PLUGIN_VALUES_FILES,VALUES_FILES",
+			EnvVar: "PLUGIN_SET,SET",
+		},
+		cli.StringFlag{
+			Name:   "rollout-status",
+			Usage:  "a kubernetes resource to wait for before completing",
+			EnvVar: "PLUGIN_ROLLOUT_STATUS,ROLLOUT_STATUS",
 		},
 	}
 	if err := app.Run(os.Args); err != nil {
@@ -60,12 +70,14 @@ func run(context *cli.Context) error {
 	}
 	plugin := Plugin{
 		Config: Config{
-			KubeConfig: context.String("kube-config"),
-			Context:    context.String("context"),
-			Release:    context.String("release"),
-			Chart:      context.String("chart"),
-			Values:     context.String("values"),
-			Set:        context.String("set"),
+			KubeConfig:      context.String("kube-config"),
+			TillerNamespace: context.String("tiller-namespace"),
+			Context:         context.String("context"),
+			Release:         context.String("release"),
+			Chart:           context.String("chart"),
+			Values:          context.String("values"),
+			Set:             context.String("set"),
+			RolloutStatus:   context.String("rollout-status"),
 		},
 	}
 	return plugin.Exec()
