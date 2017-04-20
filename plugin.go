@@ -82,6 +82,7 @@ func (plugin *Plugin) Exec() error {
 	// wait for any deployments
 	if config.RolloutStatus != "" {
 		lastOutput := ""
+		logCommand(kubectlRolloutStatus(config))
 		for {
 			output, err := outputFromCmd(kubectlRolloutStatus(config))
 			if err != nil {
@@ -168,11 +169,9 @@ func helmUpgradeCmd(config Config) *exec.Cmd {
 }
 
 func outputFromCmd(cmd *exec.Cmd) (string, error) {
-	logCommand(cmd) // log the command to be run
 	cmd.Stderr = os.Stderr
 	bytes, err := cmd.Output()
 	output := string(bytes)
-	fmt.Fprintf(os.Stdout, "%s\n", output)
 	return output, err
 }
 
